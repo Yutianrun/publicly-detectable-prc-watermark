@@ -195,6 +195,8 @@ def generate_text_plain_with_bits(
             output.logits[:, -1, :vocab_size], dim=-1
         ).cpu()
 
+        # probs = list(probs_tensor.squeeze().numpy())
+        probs_tensor = probs_tensor.to(torch.float32)
         probs = list(probs_tensor.squeeze().numpy())
         bits = ""
         for j in range(max_bit_length):
@@ -267,6 +269,8 @@ def generate_text_symmetric(
             output.logits[:, -1, :vocab_size], dim=-1
         ).cpu()
 
+        # probs = list(probs_tensor.squeeze().numpy())
+        probs_tensor = probs_tensor.to(torch.float32)
         probs = list(probs_tensor.squeeze().numpy())
         bits = ""
         previous_bits = ""
@@ -310,7 +314,30 @@ def generate_text_symmetric(
         skip_special_tokens=True,
         clean_up_tokenization_spaces=True,
     )
+    # print(bitstring)
+    # print(bitstring_to_generated_text(bitstring, tokenizer))
+    # print(generated_text_to_bitstring(generated_text, tokenizer))
     return generated_text, generated_tokens, bitstring
+
+def bitstring_to_generated_text(bitstring: str, tokenizer: AutoTokenizer) -> str:
+
+    encode, decode, padded_encoding, max_bit_length = simple_encoder(
+        tokenizer.get_vocab().values()
+    )
+    """Convert a bitstring to generated text."""
+    tokens = []
+    
+    # 确保 max_bit_length 是一个有效的整数
+    for i in range(0, len(bitstring), max_bit_length):
+        bits = bitstring[i:i + max_bit_length]
+        token = decode(bits)  # 使用之前定义的 decode 函数
+        tokens.append(token)
+    
+    # 将 tokens 转换为文本
+    generated_text = tokenizer.decode(tokens, skip_special_tokens=True)
+    return generated_text
+
+
 
 
 def generate_text_asymmetric(
@@ -349,6 +376,7 @@ def generate_text_asymmetric(
     initial_inputs_len = inputs.size(1)
 
     attn = torch.ones_like(inputs)
+
     past: torch.Tensor | None = None
 
     sk: list = []
@@ -796,12 +824,28 @@ def sample_token(
 
         with torch.no_grad():
             if past:
+                if isinstance(past, torch.Tensor):
+                    logging.debug(f"past shape: {past.shape}")
+                else:
+                    logging.debug(f"past is not a tensor, type: {type(past)}")
+
+                if isinstance(attn, torch.Tensor):
+                    logging.debug(f"attention_mask shape: {attn.shape}")
+                else:
+                    logging.debug(f"attention_mask is not a tensor, type: {type(attn)}")
+
+                # logging.info(f"inputs shape: {inputs.shape} ")
+                # logging.info(f"attn shape: {attn.shape}")
+
+                # logging.info(f"past shape: {past.shape}")
+
                 output = model(
                     inputs[:, -1:],
                     past_key_values=past,
                     attention_mask=attn,
                 )
             else:
+                logging.debug(f"inputs shape: {inputs.shape}")
                 output = model(inputs)
 
             logits = output.logits[:, -1, :vocab_size]

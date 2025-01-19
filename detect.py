@@ -2,13 +2,33 @@ import argparse
 import hashlib
 import logging
 import pickle
-
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from bls.utils import *
 from bplib.bp import G2Elem
 from petlib.pack import decode
-
+from reduce import (
+    simple_encoder,
+)
 import crypto
+
+def generated_text_to_bitstring(text: str, tokenizer: AutoTokenizer) -> str:
+    """Convert generated text to a bitstring."""
+
+    encode, decode, padded_encoding, max_bit_length = simple_encoder(
+        tokenizer.get_vocab().values()
+    )
+    
+    # 将文本转换为 tokens
+    tokens = tokenizer.encode(text, add_special_tokens=False)
+    bitstring = ""
+    
+    # 将每个 token 转换为比特字符串
+    for token in tokens:
+        bits = encode(token)  # 使用之前定义的 encode 函数
+        bitstring += bits  # 拼接比特字符串
+    
+    return bitstring
 
 logging.basicConfig(filename="logging.log", encoding="utf-8", level=logging.INFO)
 
@@ -38,31 +58,56 @@ def main(args: argparse.Namespace) -> None:
             args.max_planted_errors,
         )
     elif args.gen_type == "symmetric":
-        watermarked = detect_symmetric_watermark(text, args.security_parameter)
+
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            device_map="auto",
+            torch_dtype="auto",
+            load_in_4bit=args.load_in_4bit,
+        )
+        logging.info(f"loaded weights in {model.config.torch_dtype}")
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model,
+            max_length=model.config.max_position_embeddings,
+            truncation=True,
+        )
+
+        watermarked = detect_symmetric_watermark(text, args.security_parameter, tokenizer)
     logging.info(f"watermarked: {watermarked}")
     print(watermarked)
 
 
-def detect_symmetric_watermark(bitstring: str, security_parameter: float) -> bool:
+def detect_symmetric_watermark(text: str, security_parameter: float,  tokenizer: AutoTokenizer) -> bool:
     """Detects a watermark in a bitstring using the symmetric watermark detection algorithm, Algorithm 4 from Christ et al. (2023)."""
 
-    L = len(bitstring)
 
+    print(text)
+    bitstring = generated_text_to_bitstring(text, tokenizer)
+    print(bitstring)
+    L = len(bitstring)
+    
     for i in range(L):
         r = bitstring[: (i + 1)]
+        # r = "00011100101001101011"
 
         v = []
         for j in range(i + 1, L):
             unkeyed_hash = crypto.unkeyed_hash_to_float(
                 bytes(r, "utf-8") + bytes(bin(j), "utf-8")
             )
+            # if(i==33):
+            #     print("r, j, unkeyed_hash", r, j, unkeyed_hash)
             v.append(
                 int(bitstring[j]) * unkeyed_hash
                 + (1 - int(bitstring[j])) * (1 - unkeyed_hash)
             )
-
+        
+        # if(i==33):
+        #     print("v", v)
         lhs = sum([np.log(1 / vj) for vj in v])
+        # print("lhs_mean", np.mean(lhs), "ln2 pr")
         rhs = (L - i) + security_parameter * np.sqrt(L - i)
+        # print("i,lhs,rhs, bitstring", i,lhs, rhs, r)
         if lhs > rhs:
             return True
 
@@ -150,6 +195,18 @@ def validate_args(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="check for a watermark in text")
+
+    parser.add_argument(
+        "--model",
+        default="mistralai/Mistral-7B-v0.1",
+        type=str,
+        help="the id of the Hugging Face model to use",
+    )
+    parser.add_argument(
+        "--load-in-4bit",
+        action=argparse.BooleanOptionalAction,
+        help="whether to load the model with 4-bit quantization",
+    )
     parser.add_argument(
         "document",
         type=str,
@@ -199,10 +256,6 @@ if __name__ == "__main__":
         help="the number of error correcting symbols to use",
     )
 
-    args = parser.parse_args()
-    if args.gen_type == "asymmetric" and (args.pk is None or args.params is None):
-        parser.error("--gen-type asymmetric requires --pk and --params")
-
     # The following argument is used in symmetric watermarking only: security_parameter
     parser.add_argument(
         "--security-parameter",
@@ -210,5 +263,11 @@ if __name__ == "__main__":
         type=int,
         help="the security parameter for the symmetric watermarking algorithm",
     )
+
+    args = parser.parse_args()
+    if args.gen_type == "asymmetric" and (args.pk is None or args.params is None):
+        parser.error("--gen-type asymmetric requires --pk and --params")
+
+
 
     main(args)

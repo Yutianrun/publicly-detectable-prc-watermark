@@ -7,3 +7,5 @@ __pycache__/
 *.pickle
 *.png
 data/
+*.txt
+*.ipynb
